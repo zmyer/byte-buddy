@@ -1,7 +1,31 @@
 Byte Buddy release notes
 ------------------------
 
-### 17. November 2016: version 1.5.6
+### 16. December 2016: version 1.5.10
+
+- Added possibility for readding types after a failed retransformation batch.
+- Added partitioning batch allocator.
+
+### 13. December 2016: version 1.5.9
+
+- Allow specifying `TargetType` in `Advice.FieldValue`.
+- Allow array value explosion in `MethodCall`.
+- Extended `FieldAccessor` to allow reading `FieldDescription`s directly.
+- Fixed class name resolution in Maven and Gradle plugins.
+
+### 5. December 2016: version 1.5.8
+
+- Added implementation for attachment on Linux and HotSpot using a non-JDK VM.
+- Fixed argument resolution for `ByteBuddyAgent`.
+- Fixed field resolution for `MethodCall` to allow custom definition of fields.
+- Fixed visibility checks.
+- Do not override default method for proxies for `Pipe`.
+
+### 25. November 2016: version 1.5.7
+
+- Fixed type discovery for custom advice annotation bindings.
+
+### 18. November 2016: version 1.5.6
 
 - Added possibility to configure suppression handler in `Advice` classes.
 

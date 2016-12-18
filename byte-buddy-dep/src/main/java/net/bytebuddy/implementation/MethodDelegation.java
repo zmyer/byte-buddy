@@ -871,7 +871,7 @@ public class MethodDelegation implements Implementation.Composable {
 
             @Override
             public Resolution resolve(TypeDescription instrumentedType) {
-                return new Resolution(candidates.filter(isVisibleTo(instrumentedType)));
+                return new Resolution(candidates.filter(isAccessibleTo(instrumentedType)));
             }
 
             @Override
@@ -975,7 +975,7 @@ public class MethodDelegation implements Implementation.Composable {
                 return new Resolution(methodGraphCompiler.compile(resolution.getField().getType(), instrumentedType).listNodes().asMethodList().filter(matcher),
                         new StackManipulation.Compound(resolution.getField().isStatic()
                                 ? StackManipulation.Trivial.INSTANCE
-                                : MethodVariableAccess.REFERENCE.loadFrom(0), FieldAccess.forField(resolution.getField()).read()),
+                                : MethodVariableAccess.loadThis(), FieldAccess.forField(resolution.getField()).read()),
                         new MethodDelegationBinder.MethodInvoker.Virtual(resolution.getField().getType().asErasure()),
                         resolution.getField().isStatic());
             }
@@ -1185,7 +1185,7 @@ public class MethodDelegation implements Implementation.Composable {
 
             @Override
             public Resolution resolve(TypeDescription instrumentedType) {
-                return new Resolution(candidates.filter(isVisibleTo(instrumentedType)),
+                return new Resolution(candidates.filter(isAccessibleTo(instrumentedType)),
                         new StackManipulation.Compound(TypeCreation.of(typeDescription), Duplication.SINGLE),
                         MethodDelegationBinder.MethodInvoker.Simple.INSTANCE);
             }

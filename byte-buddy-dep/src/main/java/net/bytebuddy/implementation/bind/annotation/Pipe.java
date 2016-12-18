@@ -27,6 +27,7 @@ import net.bytebuddy.implementation.bytecode.member.FieldAccess;
 import net.bytebuddy.implementation.bytecode.member.MethodInvocation;
 import net.bytebuddy.implementation.bytecode.member.MethodReturn;
 import net.bytebuddy.implementation.bytecode.member.MethodVariableAccess;
+import net.bytebuddy.matcher.ElementMatchers;
 import org.objectweb.asm.MethodVisitor;
 
 import java.io.Serializable;
@@ -297,7 +298,7 @@ public @interface Pipe {
                         .name(auxiliaryTypeName)
                         .modifiers(DEFAULT_TYPE_MODIFIER)
                         .implement(serializableProxy ? new Class<?>[]{Serializable.class} : new Class<?>[0])
-                        .method(isDeclaredBy(forwardingType))
+                        .method(ElementMatchers.<MethodDescription>isAbstract().and(isDeclaredBy(forwardingType)))
                         .intercept(new MethodCall(sourceMethod, assigner))
                         .defineConstructor().withParameters(parameterFields.values())
                         .intercept(ConstructorCall.INSTANCE);
@@ -415,20 +416,19 @@ public @interface Pipe {
 
                     @Override
                     public Size apply(MethodVisitor methodVisitor, Context implementationContext, MethodDescription instrumentedMethod) {
-                        StackManipulation thisReference = MethodVariableAccess.REFERENCE.loadFrom(0);
                         FieldList<?> fieldList = instrumentedType.getDeclaredFields();
                         StackManipulation[] fieldLoading = new StackManipulation[fieldList.size()];
                         int index = 0;
                         for (FieldDescription fieldDescription : fieldList) {
                             fieldLoading[index] = new StackManipulation.Compound(
-                                    thisReference,
-                                    MethodVariableAccess.of(fieldDescription.getType()).loadFrom(instrumentedMethod.getParameters().get(index).getOffset()),
+                                    MethodVariableAccess.loadThis(),
+                                    MethodVariableAccess.load(instrumentedMethod.getParameters().get(index)),
                                     FieldAccess.forField(fieldDescription).write()
                             );
                             index++;
                         }
                         StackManipulation.Size stackSize = new StackManipulation.Compound(
-                                thisReference,
+                                MethodVariableAccess.loadThis(),
                                 MethodInvocation.invoke(ConstructorCall.INSTANCE.objectTypeDefaultConstructor),
                                 new StackManipulation.Compound(fieldLoading),
                                 MethodReturn.VOID

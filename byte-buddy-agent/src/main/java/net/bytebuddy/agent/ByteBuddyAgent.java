@@ -292,7 +292,7 @@ public class ByteBuddyAgent {
     private static void install(AttachmentProvider attachmentProvider, String processId, String argument, AgentProvider agentProvider) {
         AttachmentProvider.Accessor attachmentAccessor = attachmentProvider.attempt();
         if (!attachmentAccessor.isAvailable()) {
-            throw new IllegalStateException();
+            throw new IllegalStateException("No compatible attachment provider is not available");
         }
         try {
             Class<?> virtualMachineType = attachmentAccessor.getVirtualMachineType();
@@ -301,11 +301,11 @@ public class ByteBuddyAgent {
                     .invoke(STATIC_MEMBER, processId);
             try {
                 virtualMachineType
-                        .getDeclaredMethod(LOAD_AGENT_METHOD_NAME, String.class, String.class)
-                        .invoke(virtualMachineInstance, agentProvider.resolve().getAbsolutePath(), null);
+                        .getMethod(LOAD_AGENT_METHOD_NAME, String.class, String.class)
+                        .invoke(virtualMachineInstance, agentProvider.resolve().getAbsolutePath(), argument);
             } finally {
                 virtualMachineType
-                        .getDeclaredMethod(DETACH_METHOD_NAME)
+                        .getMethod(DETACH_METHOD_NAME)
                         .invoke(virtualMachineInstance);
             }
         } catch (RuntimeException exception) {
@@ -346,7 +346,8 @@ public class ByteBuddyAgent {
                 ForJ9Vm.INSTANCE,
                 ForToolsJarVm.JVM_ROOT,
                 ForToolsJarVm.JDK_ROOT,
-                ForToolsJarVm.MACINTOSH);
+                ForToolsJarVm.MACINTOSH,
+                ForUnixHotSpotVm.INSTANCE);
 
         /**
          * Attempts the creation of an accessor for a specific JVM's attachment API.
@@ -590,7 +591,8 @@ public class ByteBuddyAgent {
             @Override
             @SuppressFBWarnings(value = "DP_CREATE_CLASSLOADER_INSIDE_DO_PRIVILEGED", justification = "Privilege is explicit user responsibility")
             public Accessor attempt() {
-                File toolsJar = new File(System.getProperty(JAVA_HOME_PROPERTY).replace('\\', '/') + "/../" + toolsJarPath);
+                File toolsJar = new File(System.getProperty(JAVA_HOME_PROPERTY), toolsJarPath);
+                System.out.println("Tools jar: " + toolsJar + " is present: " + toolsJar.isFile());
                 try {
                     return toolsJar.isFile() && toolsJar.canRead()
                             ? Accessor.Simple.of(new URLClassLoader(new URL[]{toolsJar.toURI().toURL()}, BOOTSTRAP_CLASS_LOADER))
@@ -603,6 +605,31 @@ public class ByteBuddyAgent {
             @Override
             public String toString() {
                 return "ByteBuddyAgent.AttachmentProvider.ForToolsJarVm." + name();
+            }
+        }
+
+        /**
+         * An attachment provider using a custom protocol implementation for HotSpot on Unix.
+         */
+        enum ForUnixHotSpotVm implements AttachmentProvider {
+
+            /**
+             * The singleton instance.
+             */
+            INSTANCE;
+
+            @Override
+            public Accessor attempt() {
+                try {
+                    return new Accessor.Simple(VirtualMachine.ForHotSpot.OnUnix.assertAvailability());
+                } catch (Throwable ignored) {
+                    return Accessor.Unavailable.INSTANCE;
+                }
+            }
+
+            @Override
+            public String toString() {
+                return "ByteBuddyAgent.AttachmentProvider.ForUnixHotSpotVm." + name();
             }
         }
 

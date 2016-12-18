@@ -2,19 +2,16 @@ package net.bytebuddy.implementation;
 
 import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.description.method.MethodDescription;
+import net.bytebuddy.description.modifier.Visibility;
 import net.bytebuddy.description.type.TypeDescription;
 import net.bytebuddy.dynamic.DynamicType;
 import net.bytebuddy.dynamic.loading.ClassLoadingStrategy;
-import net.bytebuddy.dynamic.scaffold.InstrumentedType;
 import net.bytebuddy.implementation.bytecode.StackManipulation;
 import net.bytebuddy.implementation.bytecode.assign.Assigner;
 import net.bytebuddy.implementation.bytecode.constant.TextConstant;
 import net.bytebuddy.implementation.bytecode.member.MethodReturn;
 import net.bytebuddy.matcher.ElementMatchers;
-import net.bytebuddy.test.utility.CallTraceable;
-import net.bytebuddy.test.utility.JavaVersionRule;
-import net.bytebuddy.test.utility.MockitoRule;
-import net.bytebuddy.test.utility.ObjectPropertyAssertion;
+import net.bytebuddy.test.utility.*;
 import net.bytebuddy.utility.JavaConstant;
 import net.bytebuddy.utility.JavaType;
 import org.hamcrest.CoreMatchers;
@@ -26,7 +23,6 @@ import org.junit.rules.TestRule;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Iterator;
@@ -41,7 +37,7 @@ import static org.mockito.Mockito.*;
 
 public class MethodCallTest {
 
-    private static final String FOO = "foo", BAR = "bar";
+    private static final String FOO = "foo", BAR = "bar", INVOKE_FOO = "invokeFoo";
 
     private static final String SINGLE_DEFAULT_METHOD = "net.bytebuddy.test.precompiled.SingleDefaultMethodInterface";
 
@@ -407,6 +403,125 @@ public class MethodCallTest {
         assertThat(instance.foo(FOO, BAR), is(FOO + BAR));
     }
 
+    @Test
+    public void testWithArgumentsFromArray() throws Exception {
+        DynamicType.Loaded<MethodCallWithExplicitArgument> loaded = new ByteBuddy()
+                .subclass(MethodCallWithExplicitArgument.class)
+                .implement(MethodCallDelegator.class)
+                .intercept(MethodCall.invoke(MethodCallWithExplicitArgument.class.getDeclaredMethod("foo", String.class)).withArgumentArrayElements(0, 1))
+                .make()
+                .load(MethodCallDelegator.class.getClassLoader(), ClassLoadingStrategy.Default.WRAPPER);
+        assertThat(loaded.getLoadedAuxiliaryTypes().size(), is(0));
+        assertThat(loaded.getLoaded().getDeclaredMethods().length, is(1));
+        assertThat(loaded.getLoaded().getDeclaredMethod(INVOKE_FOO, String[].class), not(nullValue(Method.class)));
+        assertThat(loaded.getLoaded().getDeclaredConstructors().length, is(1));
+        assertThat(loaded.getLoaded().getDeclaredFields().length, is(0));
+        MethodCallDelegator instance = (MethodCallDelegator) loaded.getLoaded().getDeclaredConstructor().newInstance();
+        assertThat(instance.getClass(), not(CoreMatchers.<Class<?>>is(MethodCallWithExplicitArgument.class)));
+        assertThat(instance, instanceOf(MethodCallDelegator.class));
+        assertThat(instance.invokeFoo(BAR), is(BAR));
+    }
+
+    @Test
+    public void testWithArgumentsFromArrayComplete() throws Exception {
+        DynamicType.Loaded<MethodCallWithExplicitArgument> loaded = new ByteBuddy()
+                .subclass(MethodCallWithExplicitArgument.class)
+                .implement(MethodCallDelegator.class)
+                .intercept(MethodCall.invoke(MethodCallWithExplicitArgument.class.getDeclaredMethod("foo", String.class)).withArgumentArrayElements(0))
+                .make()
+                .load(MethodCallDelegator.class.getClassLoader(), ClassLoadingStrategy.Default.WRAPPER);
+        assertThat(loaded.getLoadedAuxiliaryTypes().size(), is(0));
+        assertThat(loaded.getLoaded().getDeclaredMethods().length, is(1));
+        assertThat(loaded.getLoaded().getDeclaredMethod(INVOKE_FOO, String[].class), not(nullValue(Method.class)));
+        assertThat(loaded.getLoaded().getDeclaredConstructors().length, is(1));
+        assertThat(loaded.getLoaded().getDeclaredFields().length, is(0));
+        MethodCallDelegator instance = (MethodCallDelegator) loaded.getLoaded().getDeclaredConstructor().newInstance();
+        assertThat(instance.getClass(), not(CoreMatchers.<Class<?>>is(MethodCallWithExplicitArgument.class)));
+        assertThat(instance, instanceOf(MethodCallDelegator.class));
+        assertThat(instance.invokeFoo(BAR), is(BAR));
+    }
+
+    @Test
+    public void testWithArgumentsFromArrayExplicitSize() throws Exception {
+        DynamicType.Loaded<MethodCallWithExplicitArgument> loaded = new ByteBuddy()
+                .subclass(MethodCallWithExplicitArgument.class)
+                .implement(MethodCallDelegator.class)
+                .intercept(MethodCall.invoke(MethodCallWithExplicitArgument.class.getDeclaredMethod("foo", String.class)).withArgumentArrayElements(0, 1, 1))
+                .make()
+                .load(MethodCallDelegator.class.getClassLoader(), ClassLoadingStrategy.Default.WRAPPER);
+        assertThat(loaded.getLoadedAuxiliaryTypes().size(), is(0));
+        assertThat(loaded.getLoaded().getDeclaredMethods().length, is(1));
+        assertThat(loaded.getLoaded().getDeclaredMethod(INVOKE_FOO, String[].class), not(nullValue(Method.class)));
+        assertThat(loaded.getLoaded().getDeclaredConstructors().length, is(1));
+        assertThat(loaded.getLoaded().getDeclaredFields().length, is(0));
+        MethodCallDelegator instance = (MethodCallDelegator) loaded.getLoaded().getDeclaredConstructor().newInstance();
+        assertThat(instance.getClass(), not(CoreMatchers.<Class<?>>is(MethodCallWithExplicitArgument.class)));
+        assertThat(instance, instanceOf(MethodCallDelegator.class));
+        assertThat(instance.invokeFoo(FOO, BAR, FOO), is(BAR));
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void testWithArgumentsFromArrayDoesNotExist() throws Exception {
+        new ByteBuddy()
+                .subclass(MethodCallWithExplicitArgument.class)
+                .implement(MethodCallDelegator.class)
+                .intercept(MethodCall.invoke(MethodCallWithExplicitArgument.class.getDeclaredMethod("foo", String.class)).withArgumentArrayElements(1, 1))
+                .make();
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void testWithArgumentsFromArrayDoesNotExistCompleteArray() throws Exception {
+        new ByteBuddy()
+                .subclass(MethodCallWithExplicitArgument.class)
+                .implement(MethodCallDelegator.class)
+                .intercept(MethodCall.invoke(MethodCallWithExplicitArgument.class.getDeclaredMethod("foo", String.class)).withArgumentArrayElements(1))
+                .make();
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void testWithArgumentsFromArrayIllegalType() throws Exception {
+        new ByteBuddy()
+                .subclass(MethodCallWithExplicitArgument.class)
+                .implement(IllegalMethodCallDelegator.class)
+                .intercept(MethodCall.invoke(MethodCallWithExplicitArgument.class.getDeclaredMethod("foo", String.class)).withArgumentArrayElements(0, 1))
+                .make();
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void testWithArgumentsFromArrayIllegalTypeCompleteArray() throws Exception {
+        new ByteBuddy()
+                .subclass(MethodCallWithExplicitArgument.class)
+                .implement(IllegalMethodCallDelegator.class)
+                .intercept(MethodCall.invoke(MethodCallWithExplicitArgument.class.getDeclaredMethod("foo", String.class)).withArgumentArrayElements(0))
+                .make();
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testNegativeIndex() throws Exception {
+        MethodCall.invoke(MethodCallWithExplicitArgument.class.getDeclaredMethod("foo", String.class)).withArgumentArrayElements(-1, 1);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testNegativeIndexComplete() throws Exception {
+        MethodCall.invoke(MethodCallWithExplicitArgument.class.getDeclaredMethod("foo", String.class)).withArgumentArrayElements(-1);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testNegativeStartIndex() throws Exception {
+        MethodCall.invoke(MethodCallWithExplicitArgument.class.getDeclaredMethod("foo", String.class)).withArgumentArrayElements(0, -1, 1);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testNegativeSize() throws Exception {
+        MethodCall.invoke(MethodCallWithExplicitArgument.class.getDeclaredMethod("foo", String.class)).withArgumentArrayElements(0, 1, -1);
+    }
+
+    @Test
+    public void testSameSize() throws Exception {
+        MethodCall methodCall = MethodCall.invoke(MethodCallWithExplicitArgument.class.getDeclaredMethod("foo", String.class));
+        assertThat(methodCall.withArgumentArrayElements(0, 0), sameInstance(methodCall));
+    }
+
     @Test(expected = IllegalStateException.class)
     public void testWithTooBigParameter() throws Exception {
         new ByteBuddy()
@@ -587,8 +702,9 @@ public class MethodCallTest {
         Object target = new Object();
         DynamicType.Loaded<ExplicitTarget> loaded = new ByteBuddy()
                 .subclass(ExplicitTarget.class)
+                .defineField(FOO, Object.class, Visibility.PUBLIC)
                 .method(isDeclaredBy(ExplicitTarget.class))
-                .intercept(MethodCall.invoke(Object.class.getDeclaredMethod("toString")).onInstanceField(Object.class, FOO))
+                .intercept(MethodCall.invoke(Object.class.getDeclaredMethod("toString")).onField(FOO))
                 .make()
                 .load(ExplicitTarget.class.getClassLoader(), ClassLoadingStrategy.Default.WRAPPER);
         assertThat(loaded.getLoadedAuxiliaryTypes().size(), is(0));
@@ -597,9 +713,7 @@ public class MethodCallTest {
         assertThat(loaded.getLoaded().getDeclaredConstructors().length, is(1));
         assertThat(loaded.getLoaded().getDeclaredFields().length, is(1));
         ExplicitTarget instance = loaded.getLoaded().getDeclaredConstructor().newInstance();
-        Field field = loaded.getLoaded().getDeclaredField(FOO);
-        field.setAccessible(true);
-        field.set(instance, target);
+        loaded.getLoaded().getDeclaredField(FOO).set(instance, target);
         assertThat(instance.getClass(), not(CoreMatchers.<Class<?>>is(ExplicitTarget.class)));
         assertThat(instance, instanceOf(ExplicitTarget.class));
         assertThat(instance.foo(), is(target.toString()));
@@ -811,10 +925,12 @@ public class MethodCallTest {
     }
 
     @Test(expected = IllegalStateException.class)
-    public void testMethodCallOnInterfaceToInstanceField() throws Exception {
-        InstrumentedType instrumentedType = mock(InstrumentedType.class);
-        when(instrumentedType.isInterface()).thenReturn(true);
-        MethodCall.invoke(String.class.getDeclaredMethod("toString")).onInstanceField(String.class, FOO).prepare(instrumentedType);
+    public void testMethodCallFieldDoesNotExist() throws Exception {
+        new ByteBuddy()
+                .subclass(ExplicitTarget.class)
+                .method(isDeclaredBy(ExplicitTarget.class))
+                .intercept(MethodCall.invoke(Object.class.getDeclaredMethod("toString")).onField(FOO))
+                .make();
     }
 
     @Test
@@ -837,8 +953,8 @@ public class MethodCallTest {
         ObjectPropertyAssertion.of(MethodCall.MethodInvoker.ForSuperMethodInvocation.class).apply();
         ObjectPropertyAssertion.of(MethodCall.MethodInvoker.ForDefaultMethodInvocation.class).apply();
         ObjectPropertyAssertion.of(MethodCall.TerminationHandler.class).apply();
-        ObjectPropertyAssertion.of(MethodCall.TargetHandler.ForStaticField.class).apply();
-        ObjectPropertyAssertion.of(MethodCall.TargetHandler.ForInstanceField.class).apply();
+        ObjectPropertyAssertion.of(MethodCall.TargetHandler.ForValue.class).apply();
+        ObjectPropertyAssertion.of(MethodCall.TargetHandler.ForField.class).apply();
         ObjectPropertyAssertion.of(MethodCall.TargetHandler.ForSelfOrStaticInvocation.class).apply();
         ObjectPropertyAssertion.of(MethodCall.TargetHandler.ForConstructingInvocation.class).apply();
         ObjectPropertyAssertion.of(MethodCall.TargetHandler.ForMethodParameter.class).apply();
@@ -866,6 +982,9 @@ public class MethodCallTest {
         ObjectPropertyAssertion.of(MethodCall.ArgumentLoader.ForClassConstant.class).apply();
         ObjectPropertyAssertion.of(MethodCall.ArgumentLoader.ForEnumerationValue.class).apply();
         ObjectPropertyAssertion.of(MethodCall.ArgumentLoader.ForJavaConstant.class).apply();
+        ObjectPropertyAssertion.of(MethodCall.ArgumentLoader.ForMethodParameterArray.class).apply();
+        ObjectPropertyAssertion.of(MethodCall.ArgumentLoader.ForMethodParameterArray.OfParameter.class).apply();
+        ObjectPropertyAssertion.of(MethodCall.ArgumentLoader.ForMethodParameterArray.OfInvokedMethod.class).apply();
     }
 
     public static class SimpleMethod {
@@ -959,6 +1078,16 @@ public class MethodCallTest {
         public String foo(String first, String second) {
             return first + second;
         }
+    }
+
+    public interface MethodCallDelegator {
+
+        String invokeFoo(String... argument);
+    }
+
+    public interface IllegalMethodCallDelegator {
+
+        String invokeFoo(String argument);
     }
 
     @SuppressWarnings("unused")

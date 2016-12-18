@@ -11,6 +11,7 @@ import net.bytebuddy.description.type.TypeDefinition;
 import net.bytebuddy.description.type.TypeDescription;
 import net.bytebuddy.description.type.TypeList;
 import net.bytebuddy.dynamic.ClassFileLocator;
+import net.bytebuddy.dynamic.TargetType;
 import net.bytebuddy.dynamic.scaffold.FieldLocator;
 import net.bytebuddy.dynamic.scaffold.InstrumentedType;
 import net.bytebuddy.implementation.Implementation;
@@ -2276,7 +2277,7 @@ public class Advice implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisito
                     public StackManipulation resolveRead() {
                         return new StackManipulation.Compound(fieldDescription.isStatic()
                                 ? StackManipulation.Trivial.INSTANCE
-                                : MethodVariableAccess.REFERENCE.loadFrom(0), FieldAccess.forField(fieldDescription).read(), readAssignment);
+                                : MethodVariableAccess.loadThis(), FieldAccess.forField(fieldDescription).read(), readAssignment);
                     }
 
                     @Override
@@ -2357,7 +2358,7 @@ public class Advice implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisito
                                 preparation = StackManipulation.Trivial.INSTANCE;
                             } else {
                                 preparation = new StackManipulation.Compound(
-                                        MethodVariableAccess.REFERENCE.loadFrom(0),
+                                        MethodVariableAccess.loadThis(),
                                         Duplication.SINGLE.flipOver(fieldDescription.getType()),
                                         Removal.SINGLE
                                 );
@@ -2905,10 +2906,7 @@ public class Advice implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisito
                         if (!readAssignment.isValid()) {
                             throw new IllegalStateException("Cannot assign " + parameterDescription + " to " + target);
                         }
-                        valueReads.add(new StackManipulation.Compound(
-                                MethodVariableAccess.of(parameterDescription.getType()).loadFrom(parameterDescription.getOffset()),
-                                readAssignment
-                        ));
+                        valueReads.add(new StackManipulation.Compound(MethodVariableAccess.load(parameterDescription), readAssignment));
                     }
                     if (readOnly) {
                         return new Target.ForArray.ReadOnly(target, valueReads);
@@ -2919,10 +2917,7 @@ public class Advice implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisito
                             if (!writeAssignment.isValid()) {
                                 throw new IllegalStateException("Cannot assign " + target + " to " + parameterDescription);
                             }
-                            valueWrites.add(new StackManipulation.Compound(
-                                    writeAssignment,
-                                    MethodVariableAccess.of(parameterDescription.getType()).storeAt(parameterDescription.getOffset())
-                            ));
+                            valueWrites.add(new StackManipulation.Compound(writeAssignment, MethodVariableAccess.store(parameterDescription)));
                         }
                         return new Target.ForArray.ReadWrite(target, valueReads, valueWrites);
                     }
@@ -3272,10 +3267,12 @@ public class Advice implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisito
 
                     @Override
                     protected FieldLocator fieldLocator(TypeDescription instrumentedType) {
-                        if (!instrumentedType.isAssignableTo(declaringType)) {
+                        if (!declaringType.represents(TargetType.class) && !instrumentedType.isAssignableTo(declaringType)) {
                             throw new IllegalStateException(declaringType + " is no super type of " + instrumentedType);
                         }
-                        return new FieldLocator.ForExactType(declaringType);
+                        return new FieldLocator.ForExactType(declaringType.represents(TargetType.class)
+                                ? instrumentedType
+                                : declaringType);
                     }
 
                     @Override
@@ -6932,8 +6929,7 @@ public class Advice implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisito
                         suppressionHandler.onStart(methodVisitor);
                         int index = 0, currentStackSize = 0, maximumStackSize = 0;
                         for (OffsetMapping.Target offsetMapping : offsetMappings) {
-                            Type type = Type.getType(adviceMethod.getParameters().get(index++).getType().asErasure().getDescriptor());
-                            currentStackSize += type.getSize();
+                            currentStackSize += adviceMethod.getParameters().get(index++).getType().getStackSize().getSize();
                             maximumStackSize = Math.max(maximumStackSize, currentStackSize + offsetMapping.resolveRead()
                                     .apply(methodVisitor, implementationContext)
                                     .getMaximalSize());
@@ -8240,27 +8236,6 @@ public class Advice implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisito
     public @interface OnMethodEnter {
 
         /**
-         * Determines if the annotated method should be inlined into the instrumented method or invoked from it. When a method
-         * is inlined, its byte code is copied into the body of the target method. this makes it is possible to execute code
-         * with the visibility privileges of the instrumented method while loosing the privileges of the declared method methods.
-         * When a method is not inlined, it is invoked similarly to a common Java method call. Note that it is not possible to
-         * set breakpoints within a method when it is inlined as no debugging information is copied from the advice method into
-         * the instrumented method.
-         *
-         * @return {@code true} if the annotated method should be inlined into the instrumented method.
-         */
-        boolean inline() default true;
-
-        /**
-         * Indicates that this advice should suppress any {@link Throwable} type being thrown during the advice's execution. By default,
-         * any such exception is silently suppressed. Custom behavior can be configured by using {@link Advice#withExceptionHandler(StackManipulation)}.
-         *
-         * @return The type of {@link Throwable} to suppress.
-         * @see Advice#withExceptionPrinting()
-         */
-        Class<? extends Throwable> suppress() default NoExceptionHandler.class;
-
-        /**
          * When specifying a non-primitive type, this method's return value that is subject to an {@code instanceof} check where
          * the instrumented method is only executed, if the returned instance is {@code not} an instance of the specified class.
          * Alternatively, it is possible to specify either {@link OnDefaultValue} or {@link OnNonDefaultValue} where the instrumented
@@ -8281,6 +8256,27 @@ public class Advice implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisito
          * @return {@code true} if this advice code should appear as if it was added within the first line of the instrumented method.
          */
         boolean prependLineNumber() default true;
+
+        /**
+         * Determines if the annotated method should be inlined into the instrumented method or invoked from it. When a method
+         * is inlined, its byte code is copied into the body of the target method. this makes it is possible to execute code
+         * with the visibility privileges of the instrumented method while loosing the privileges of the declared method methods.
+         * When a method is not inlined, it is invoked similarly to a common Java method call. Note that it is not possible to
+         * set breakpoints within a method when it is inlined as no debugging information is copied from the advice method into
+         * the instrumented method.
+         *
+         * @return {@code true} if the annotated method should be inlined into the instrumented method.
+         */
+        boolean inline() default true;
+
+        /**
+         * Indicates that this advice should suppress any {@link Throwable} type being thrown during the advice's execution. By default,
+         * any such exception is silently suppressed. Custom behavior can be configured by using {@link Advice#withExceptionHandler(StackManipulation)}.
+         *
+         * @return The type of {@link Throwable} to suppress.
+         * @see Advice#withExceptionPrinting()
+         */
+        Class<? extends Throwable> suppress() default NoExceptionHandler.class;
     }
 
     /**
@@ -8307,6 +8303,15 @@ public class Advice implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisito
     public @interface OnMethodExit {
 
         /**
+         * Indicates a {@link Throwable} super type for which this exit advice is invoked if it was thrown from the instrumented method.
+         * If an exception is thrown, it is available via the {@link Thrown} parameter annotation. If a method returns exceptionally,
+         * any parameter annotated with {@link Return} is assigned the parameter type's default value.
+         *
+         * @return The type of {@link Throwable} for which this exit advice handler is invoked.
+         */
+        Class<? extends Throwable> onThrowable() default NoExceptionHandler.class;
+
+        /**
          * Determines if the annotated method should be inlined into the instrumented method or invoked from it. When a method
          * is inlined, its byte code is copied into the body of the target method. this makes it is possible to execute code
          * with the visibility privileges of the instrumented method while loosing the privileges of the declared method methods.
@@ -8326,15 +8331,49 @@ public class Advice implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisito
          * @see Advice#withExceptionPrinting()
          */
         Class<? extends Throwable> suppress() default NoExceptionHandler.class;
+    }
+
+    /**
+     * <p>
+     * Indicates that the annotated parameter should be mapped to the {@code this} reference of the instrumented method.
+     * </p>
+     * <p>
+     * <b>Important</b>: Parameters with this option must not be used when from a constructor in combination with
+     * {@link OnMethodEnter} where the {@code this} reference is not available.
+     * </p>
+     *
+     * @see Advice
+     * @see OnMethodEnter
+     * @see OnMethodExit
+     */
+    @Documented
+    @Retention(RetentionPolicy.RUNTIME)
+    @java.lang.annotation.Target(ElementType.PARAMETER)
+    public @interface This {
 
         /**
-         * Indicates a {@link Throwable} super type for which this exit advice is invoked if it was thrown from the instrumented method.
-         * If an exception is thrown, it is available via the {@link Thrown} parameter annotation. If a method returns exceptionally,
-         * any parameter annotated with {@link Return} is assigned the parameter type's default value.
+         * Determines if the parameter should be assigned {@code null} if the instrumented method is static or a constructor within
+         * an entry method.
          *
-         * @return The type of {@link Throwable} for which this exit advice handler is invoked.
+         * @return {@code true} if the value assignment is optional.
          */
-        Class<? extends Throwable> onThrowable() default NoExceptionHandler.class;
+        boolean optional() default false;
+
+        /**
+         * Indicates if it is possible to write to this parameter. If this property is set to {@code false}, the annotated
+         * type must be equal to the type declaring the instrumented method if the typing is not also set to {@link Assigner.Typing#DYNAMIC}.
+         * If this property is set to {@code true}, the annotated parameter can be any super type of the instrumented method's declaring type.
+         *
+         * @return {@code true} if this parameter is read-only.
+         */
+        boolean readOnly() default true;
+
+        /**
+         * The typing that should be applied when assigning the {@code this} value.
+         *
+         * @return The typing to apply upon assignment.
+         */
+        Assigner.Typing typing() default Assigner.Typing.STATIC;
     }
 
     /**
@@ -8384,7 +8423,6 @@ public class Advice implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisito
     @java.lang.annotation.Target(ElementType.PARAMETER)
     public @interface AllArguments {
 
-
         /**
          * Indicates if it is possible to write to this parameter. If this property is set to {@code false}, the annotated
          * type must be equal to the type declaring the instrumented method if the typing is not also set to {@link Assigner.Typing#DYNAMIC}.
@@ -8396,211 +8434,6 @@ public class Advice implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisito
 
         /**
          * The typing that should be applied when assigning the arguments.
-         *
-         * @return The typing to apply upon assignment.
-         */
-        Assigner.Typing typing() default Assigner.Typing.STATIC;
-    }
-
-    /**
-     * <p>
-     * Indicates that the annotated parameter should be mapped to the {@code this} reference of the instrumented method.
-     * </p>
-     * <p>
-     * <b>Important</b>: Parameters with this option must not be used when from a constructor in combination with
-     * {@link OnMethodEnter} where the {@code this} reference is not available.
-     * </p>
-     *
-     * @see Advice
-     * @see OnMethodEnter
-     * @see OnMethodExit
-     */
-    @Documented
-    @Retention(RetentionPolicy.RUNTIME)
-    @java.lang.annotation.Target(ElementType.PARAMETER)
-    public @interface This {
-
-        /**
-         * Indicates if it is possible to write to this parameter. If this property is set to {@code false}, the annotated
-         * type must be equal to the type declaring the instrumented method if the typing is not also set to {@link Assigner.Typing#DYNAMIC}.
-         * If this property is set to {@code true}, the annotated parameter can be any super type of the instrumented method's declaring type.
-         *
-         * @return {@code true} if this parameter is read-only.
-         */
-        boolean readOnly() default true;
-
-        /**
-         * The typing that should be applied when assigning the {@code this} value.
-         *
-         * @return The typing to apply upon assignment.
-         */
-        Assigner.Typing typing() default Assigner.Typing.STATIC;
-
-        /**
-         * Determines if the parameter should be assigned {@code null} if the instrumented method is static or a constructor within
-         * an entry method.
-         *
-         * @return {@code true} if the value assignment is optional.
-         */
-        boolean optional() default false;
-    }
-
-    /**
-     * <p>
-     * Indicates that the annotated parameter should be mapped to a field in the scope of the instrumented method.
-     * </p>
-     * <p>
-     * <b>Important</b>: Parameters with this option must not be used when from a constructor in combination with
-     * {@link OnMethodEnter} and a non-static field where the {@code this} reference is not available.
-     * </p>
-     * <p>
-     * <b>Note</b>: As the mapping is virtual, Byte Buddy might be required to reserve more space on the operand stack than the
-     * optimal value when accessing this parameter. This does not normally matter as the additional space requirement is minimal.
-     * However, if the runtime performance of class creation is secondary, one can require ASM to recompute the optimal frames by
-     * setting {@link ClassWriter#COMPUTE_MAXS}. This is however only relevant when writing to a non-static field.
-     * </p>
-     *
-     * @see Advice
-     * @see OnMethodEnter
-     * @see OnMethodExit
-     */
-    @Documented
-    @Retention(RetentionPolicy.RUNTIME)
-    @java.lang.annotation.Target(ElementType.PARAMETER)
-    public @interface FieldValue {
-
-        /**
-         * Returns the name of the field.
-         *
-         * @return The name of the field.
-         */
-        String value();
-
-        /**
-         * Returns the type that declares the field that should be mapped to the annotated parameter. If this property
-         * is set to {@code void}, the field is looked up implicitly within the instrumented class's class hierarchy.
-         *
-         * @return The type that declares the field or {@code void} if this type should be determined implicitly.
-         */
-        Class<?> declaringType() default void.class;
-
-        /**
-         * Indicates if it is possible to write to this parameter. If this property is set to {@code false}, the annotated
-         * type must be equal to the mapped field type if the typing is not also set to {@link Assigner.Typing#DYNAMIC}.
-         * If this property is set to {@code true}, the  annotated parameter can be any super type of the field type.
-         *
-         * @return {@code true} if this parameter is read-only.
-         */
-        boolean readOnly() default true;
-
-        /**
-         * The typing that should be applied when assigning the field value.
-         *
-         * @return The typing to apply upon assignment.
-         */
-        Assigner.Typing typing() default Assigner.Typing.STATIC;
-    }
-
-    /**
-     * <p>
-     * Indicates that the annotated parameter should be mapped to a string representation of the instrumented method,
-     * a constant representing the {@link Class} declaring the adviced method or a {@link Method}, {@link Constructor}
-     * or {@code java.lang.reflect.Executable} representing this method.
-     * </p>
-     * <p>
-     * <b>Note</b>: A constant representing a {@link Method} or {@link Constructor} is not cached but is recreated for
-     * every read.
-     * </p>
-     *
-     * @see Advice
-     * @see OnMethodEnter
-     * @see OnMethodExit
-     */
-    @Documented
-    @Retention(RetentionPolicy.RUNTIME)
-    @java.lang.annotation.Target(ElementType.PARAMETER)
-    public @interface Origin {
-
-        /**
-         * Indicates that the origin string should be indicated by the {@link Object#toString()} representation of the instrumented method.
-         */
-        String DEFAULT = "";
-
-        /**
-         * Returns the pattern the annotated parameter should be assigned. By default, the {@link Origin#toString()} representation
-         * of the method is assigned. Alternatively, a pattern can be assigned where:
-         * <ul>
-         * <li>{@code #t} inserts the method's declaring type.</li>
-         * <li>{@code #m} inserts the name of the method ({@code <init>} for constructors and {@code <clinit>} for static initializers).</li>
-         * <li>{@code #d} for the method's descriptor.</li>
-         * <li>{@code #s} for the method's signature.</li>
-         * <li>{@code #r} for the method's return type.</li>
-         * </ul>
-         * Any other {@code #} character must be escaped by {@code \} which can be escaped by itself. This property is ignored if the annotated
-         * parameter is of type {@link Class}.
-         *
-         * @return The pattern the annotated parameter should be assigned.
-         */
-        String value() default DEFAULT;
-    }
-
-    /**
-     * Indicates that the annotated parameter should always return a default value (i.e. {@code 0} for numeric values, {@code false}
-     * for {@code boolean} types and {@code null} for reference types). Any assignments to this variable are without any effect.
-     *
-     * @see Advice
-     * @see OnMethodEnter
-     * @see OnMethodExit
-     */
-    @Documented
-    @Retention(RetentionPolicy.RUNTIME)
-    @java.lang.annotation.Target(ElementType.PARAMETER)
-    public @interface Unused {
-        /* empty */
-    }
-
-    /**
-     * Indicates that the annotated parameter should always return a default a boxed version of the instrumented methods return value
-     * (i.e. {@code 0} for numeric values, {@code false} for {@code boolean} types and {@code null} for reference types). The annotated
-     * parameter must be of type {@link Object} and cannot be assigned a value.
-     *
-     * @see Advice
-     * @see OnMethodEnter
-     * @see OnMethodExit
-     */
-    @Documented
-    @Retention(RetentionPolicy.RUNTIME)
-    @java.lang.annotation.Target(ElementType.PARAMETER)
-    public @interface StubValue {
-        /* empty */
-    }
-
-    /**
-     * <p>
-     * Indicates that the annotated parameter should be mapped to the value that is returned by the advice method that is annotated
-     * by {@link OnMethodEnter}.
-     * </p>
-     * <p><b>Note</b></p>: This annotation must only be used within an exit advice and is only meaningful in combination with an entry advice.
-     *
-     * @see Advice
-     * @see OnMethodExit
-     */
-    @Documented
-    @Retention(RetentionPolicy.RUNTIME)
-    @java.lang.annotation.Target(ElementType.PARAMETER)
-    public @interface Enter {
-
-        /**
-         * Indicates if it is possible to write to this parameter. If this property is set to {@code false}, the annotated
-         * type must be equal to the parameter of the instrumented method if the typing is not also set to {@link Assigner.Typing#DYNAMIC}.
-         * If this property is set to {@code true}, the annotated parameter can be any super type of the instrumented methods parameter.
-         *
-         * @return {@code true} if this parameter is read-only.
-         */
-        boolean readOnly() default true;
-
-        /**
-         * The typing that should be applied when assigning the enter value.
          *
          * @return The typing to apply upon assignment.
          */
@@ -8687,6 +8520,170 @@ public class Advice implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisito
 
     /**
      * <p>
+     * Indicates that the annotated parameter should be mapped to a field in the scope of the instrumented method.
+     * </p>
+     * <p>
+     * <b>Important</b>: Parameters with this option must not be used when from a constructor in combination with
+     * {@link OnMethodEnter} and a non-static field where the {@code this} reference is not available.
+     * </p>
+     * <p>
+     * <b>Note</b>: As the mapping is virtual, Byte Buddy might be required to reserve more space on the operand stack than the
+     * optimal value when accessing this parameter. This does not normally matter as the additional space requirement is minimal.
+     * However, if the runtime performance of class creation is secondary, one can require ASM to recompute the optimal frames by
+     * setting {@link ClassWriter#COMPUTE_MAXS}. This is however only relevant when writing to a non-static field.
+     * </p>
+     *
+     * @see Advice
+     * @see OnMethodEnter
+     * @see OnMethodExit
+     */
+    @Documented
+    @Retention(RetentionPolicy.RUNTIME)
+    @java.lang.annotation.Target(ElementType.PARAMETER)
+    public @interface FieldValue {
+
+        /**
+         * Returns the name of the field.
+         *
+         * @return The name of the field.
+         */
+        String value();
+
+        /**
+         * Returns the type that declares the field that should be mapped to the annotated parameter. If this property
+         * is set to {@code void}, the field is looked up implicitly within the instrumented class's class hierarchy.
+         * The value can also be set to {@link TargetType} in order to look up the type on the instrumented type.
+         *
+         * @return The type that declares the field, {@code void} if this type should be determined implicitly or
+         * {@link TargetType} for the instrumented type.
+         */
+        Class<?> declaringType() default void.class;
+
+        /**
+         * Indicates if it is possible to write to this parameter. If this property is set to {@code false}, the annotated
+         * type must be equal to the mapped field type if the typing is not also set to {@link Assigner.Typing#DYNAMIC}.
+         * If this property is set to {@code true}, the  annotated parameter can be any super type of the field type.
+         *
+         * @return {@code true} if this parameter is read-only.
+         */
+        boolean readOnly() default true;
+
+        /**
+         * The typing that should be applied when assigning the field value.
+         *
+         * @return The typing to apply upon assignment.
+         */
+        Assigner.Typing typing() default Assigner.Typing.STATIC;
+    }
+
+    /**
+     * <p>
+     * Indicates that the annotated parameter should be mapped to a string representation of the instrumented method,
+     * a constant representing the {@link Class} declaring the adviced method or a {@link Method}, {@link Constructor}
+     * or {@code java.lang.reflect.Executable} representing this method.
+     * </p>
+     * <p>
+     * <b>Note</b>: A constant representing a {@link Method} or {@link Constructor} is not cached but is recreated for
+     * every read.
+     * </p>
+     *
+     * @see Advice
+     * @see OnMethodEnter
+     * @see OnMethodExit
+     */
+    @Documented
+    @Retention(RetentionPolicy.RUNTIME)
+    @java.lang.annotation.Target(ElementType.PARAMETER)
+    public @interface Origin {
+
+        /**
+         * Indicates that the origin string should be indicated by the {@link Object#toString()} representation of the instrumented method.
+         */
+        String DEFAULT = "";
+
+        /**
+         * Returns the pattern the annotated parameter should be assigned. By default, the {@link Origin#toString()} representation
+         * of the method is assigned. Alternatively, a pattern can be assigned where:
+         * <ul>
+         * <li>{@code #t} inserts the method's declaring type.</li>
+         * <li>{@code #m} inserts the name of the method ({@code <init>} for constructors and {@code <clinit>} for static initializers).</li>
+         * <li>{@code #d} for the method's descriptor.</li>
+         * <li>{@code #s} for the method's signature.</li>
+         * <li>{@code #r} for the method's return type.</li>
+         * </ul>
+         * Any other {@code #} character must be escaped by {@code \} which can be escaped by itself. This property is ignored if the annotated
+         * parameter is of type {@link Class}.
+         *
+         * @return The pattern the annotated parameter should be assigned.
+         */
+        String value() default DEFAULT;
+    }
+
+    /**
+     * <p>
+     * Indicates that the annotated parameter should be mapped to the value that is returned by the advice method that is annotated
+     * by {@link OnMethodEnter}.
+     * </p>
+     * <p><b>Note</b></p>: This annotation must only be used within an exit advice and is only meaningful in combination with an entry advice.
+     *
+     * @see Advice
+     * @see OnMethodExit
+     */
+    @Documented
+    @Retention(RetentionPolicy.RUNTIME)
+    @java.lang.annotation.Target(ElementType.PARAMETER)
+    public @interface Enter {
+
+        /**
+         * Indicates if it is possible to write to this parameter. If this property is set to {@code false}, the annotated
+         * type must be equal to the parameter of the instrumented method if the typing is not also set to {@link Assigner.Typing#DYNAMIC}.
+         * If this property is set to {@code true}, the annotated parameter can be any super type of the instrumented methods parameter.
+         *
+         * @return {@code true} if this parameter is read-only.
+         */
+        boolean readOnly() default true;
+
+        /**
+         * The typing that should be applied when assigning the enter value.
+         *
+         * @return The typing to apply upon assignment.
+         */
+        Assigner.Typing typing() default Assigner.Typing.STATIC;
+    }
+
+    /**
+     * Indicates that the annotated parameter should always return a default a boxed version of the instrumented methods return value
+     * (i.e. {@code 0} for numeric values, {@code false} for {@code boolean} types and {@code null} for reference types). The annotated
+     * parameter must be of type {@link Object} and cannot be assigned a value.
+     *
+     * @see Advice
+     * @see OnMethodEnter
+     * @see OnMethodExit
+     */
+    @Documented
+    @Retention(RetentionPolicy.RUNTIME)
+    @java.lang.annotation.Target(ElementType.PARAMETER)
+    public @interface StubValue {
+        /* empty */
+    }
+
+    /**
+     * Indicates that the annotated parameter should always return a default value (i.e. {@code 0} for numeric values, {@code false}
+     * for {@code boolean} types and {@code null} for reference types). Any assignments to this variable are without any effect.
+     *
+     * @see Advice
+     * @see OnMethodEnter
+     * @see OnMethodExit
+     */
+    @Documented
+    @Retention(RetentionPolicy.RUNTIME)
+    @java.lang.annotation.Target(ElementType.PARAMETER)
+    public @interface Unused {
+        /* empty */
+    }
+
+    /**
+     * <p>
      * A dynamic value allows to bind parameters of an {@link Advice} method to a custom, constant value.
      * </p>
      * <p>The mapped value must be a constant value that can be embedded into a Java class file. This holds for all primitive types,
@@ -8750,40 +8747,53 @@ public class Advice implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisito
                                              boolean initialized) {
                 Object value = doResolve(instrumentedType, instrumentedMethod, target, annotation, assigner, initialized);
                 StackManipulation stackManipulation;
+                TypeDescription typeDescription;
                 if (value == null) {
                     if (target.getType().isPrimitive()) {
-                        throw new IllegalStateException("Cannot assign null to primitive " + target);
+                        throw new IllegalStateException("Cannot assign null to the primitive type " + target);
                     } else {
                         return NullConstant.INSTANCE;
                     }
                 } else if (value instanceof Boolean) {
                     stackManipulation = IntegerConstant.forValue((Boolean) value);
+                    typeDescription = new TypeDescription.ForLoadedType(boolean.class);
                 } else if (value instanceof Byte) {
                     stackManipulation = IntegerConstant.forValue((Byte) value);
+                    typeDescription = new TypeDescription.ForLoadedType(byte.class);
                 } else if (value instanceof Short) {
                     stackManipulation = IntegerConstant.forValue((Short) value);
+                    typeDescription = new TypeDescription.ForLoadedType(short.class);
                 } else if (value instanceof Character) {
                     stackManipulation = IntegerConstant.forValue((Character) value);
+                    typeDescription = new TypeDescription.ForLoadedType(char.class);
                 } else if (value instanceof Integer) {
                     stackManipulation = IntegerConstant.forValue((Integer) value);
+                    typeDescription = new TypeDescription.ForLoadedType(int.class);
                 } else if (value instanceof Long) {
                     stackManipulation = LongConstant.forValue((Long) value);
+                    typeDescription = new TypeDescription.ForLoadedType(long.class);
                 } else if (value instanceof Float) {
                     stackManipulation = FloatConstant.forValue((Float) value);
+                    typeDescription = new TypeDescription.ForLoadedType(float.class);
                 } else if (value instanceof Double) {
                     stackManipulation = DoubleConstant.forValue((Double) value);
+                    typeDescription = new TypeDescription.ForLoadedType(double.class);
                 } else if (value instanceof TypeDescription) {
                     stackManipulation = ClassConstant.of((TypeDescription) value);
+                    typeDescription = TypeDescription.CLASS;
                 } else if (value instanceof String) {
                     stackManipulation = new TextConstant((String) value);
+                    typeDescription = TypeDescription.STRING;
                 } else if (value instanceof JavaConstant) {
                     stackManipulation = ((JavaConstant) value).asStackManipulation();
+                    typeDescription = ((JavaConstant) value).getType();
                 } else {
                     throw new IllegalStateException("Not a constant value: " + value);
                 }
-                StackManipulation assignment = assigner.assign(new TypeDescription.ForLoadedType(value.getClass()).asUnboxed().asGenericType(),
-                        target.getType(),
-                        Assigner.Typing.STATIC);
+                StackManipulation assignment = assigner.assign(typeDescription.asGenericType(), target.getType(), Assigner.Typing.STATIC);
+                if (!assignment.isValid()) {
+                    throw new IllegalStateException("Cannot assign constant of type " + typeDescription + " to " + target.getType());
+                }
                 return new StackManipulation.Compound(stackManipulation, assignment);
             }
 
@@ -8974,7 +8984,7 @@ public class Advice implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisito
                 return new StackManipulation.Compound(
                         fieldDescription.isStatic()
                                 ? StackManipulation.Trivial.INSTANCE
-                                : MethodVariableAccess.REFERENCE.loadFrom(0),
+                                : MethodVariableAccess.loadThis(),
                         FieldAccess.forField(fieldDescription).read(),
                         assignment
                 );
@@ -9034,10 +9044,7 @@ public class Advice implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisito
                 if (!assignment.isValid()) {
                     throw new IllegalStateException("Cannot assign " + parameterDescription + " to " + target.getType());
                 }
-                return new StackManipulation.Compound(
-                        MethodVariableAccess.of(parameterDescription.getType()).loadFrom(parameterDescription.getOffset()),
-                        assignment
-                );
+                return new StackManipulation.Compound(MethodVariableAccess.load(parameterDescription), assignment);
             }
 
             @Override
